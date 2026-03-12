@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.env
+
+# FAISS
+faiss_store/
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store

@@ -1,0 +1,22 @@
+fastapi>=0.110.0
+uvicorn[standard]
+pydantic>=2.0
+python-dotenv
+python-multipart
+
+# LangChain + Gemini
+langchain
+langchain-community
+langchain-google-genai
+langchain-text-splitters
+
+# Vector Store
+faiss-cpu
+
+# Document Parsing
+pypdf
+aiofiles
+
+# Streaming
+sse-starlette
+httpx
