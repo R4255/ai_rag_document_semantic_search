@@ -16,18 +16,18 @@ VECTOR_STORE_PATH = "./faiss_store"
 
 class RAGService:
     """
-    Core RAG Service Engine.
-    - Uses Google Gemini (gemini-3-flash) for both embeddings and LLM inference.
-    - FAISS as the local vector store (no external infra needed).
-    - Full async pipeline: file I/O, chunking, embedding, retrieval, and streaming
-      are all run via asyncio.to_thread to keep the event loop non-blocking.
+    Multi-tenant RAG Service.
+    - Manages separate FAISS indices per user_id (session ID).
+    - Caches active indices in memory (LRU style not implemented, simpler dict cache).
     """
 
     def __init__(self):
         self.lock = asyncio.Lock()
         self.embeddings = None
-        self.vector_store = None
-        self._ingested_files: list[dict] = []  # Track ingested documents for the UI
+        # Map user_id -> FAISS index
+        self.vector_stores: dict[str, FAISS] = {}
+        # Map user_id -> list of ingested files metadata
+        self._user_files: dict[str, list[dict]] = {}
 
     def initialize(self, api_key: str):
         if not api_key:
@@ -39,85 +39,171 @@ class RAGService:
             model="gemini-embedding-001",
             google_api_key=api_key,
         )
+        print("✅ Embeddings model ready.")
 
-        if os.path.exists(VECTOR_STORE_PATH):
+    def _get_user_store_path(self, user_id: str) -> str:
+        safe_id = "".join([c for c in user_id if c.isalnum() or c in "-_"])
+        return os.path.join(VECTOR_STORE_PATH, safe_id)
+
+    async def get_vector_store(self, user_id: str):
+        """Lazy loads or creates a vector store for a specific user ID."""
+        if user_id in self.vector_stores:
+            return self.vector_stores[user_id]
+
+        path = self._get_user_store_path(user_id)
+        
+        # Try loading existing
+        if os.path.exists(path) and os.path.exists(os.path.join(path, "index.faiss")):
             try:
-                self.vector_store = FAISS.load_local(
-                    VECTOR_STORE_PATH,
-                    self.embeddings,
-                    allow_dangerous_deserialization=True,
+                # Running load_local in thread to avoid blocking
+                vs = await asyncio.to_thread(
+                    FAISS.load_local, 
+                    path, 
+                    self.embeddings, 
+                    allow_dangerous_deserialization=True
                 )
-                print("✅ Loaded existing FAISS index from disk.")
+                self.vector_stores[user_id] = vs
+                
+                # Load metadata if exists
+                meta_path = os.path.join(path, "files.json")
+                if os.path.exists(meta_path):
+                     with open(meta_path, "r") as f:
+                         self._user_files[user_id] = json.load(f)
+                else:
+                     self._user_files[user_id] = []
+                     
+                print(f"✅ Loaded FAISS index for user: {user_id}")
+                return vs
             except Exception as e:
-                print(f"⚠️  Error loading FAISS index, creating fresh: {e}")
-                self._init_empty_store()
-        else:
-            self._init_empty_store()
+                print(f"⚠️ Error loading store for {user_id}, initializing fresh: {e}")
 
-    def _init_empty_store(self):
-        self.vector_store = FAISS.from_texts(
-            ["System baseline document for vector store initialisation."],
+        # Initialize fresh store
+        vs = await asyncio.to_thread(
+            FAISS.from_texts,
+            ["User space initialization."], 
             self.embeddings,
-            metadatas=[{"source": "system", "page": 0}],
+            metadatas=[{"source": "system", "page": 0}]
         )
-        self.vector_store.save_local(VECTOR_STORE_PATH)
-        print("✅ Created fresh FAISS index.")
+        self.vector_stores[user_id] = vs
+        self._user_files[user_id] = []
+        
+        # Create dir if not exists
+        os.makedirs(path, exist_ok=True)
+        await asyncio.to_thread(vs.save_local, path)
+        return vs
 
     # ──────────────────────────── Ingestion Pipeline ────────────────────────────
 
-    async def ingest_file(self, file_path: str, filename: str) -> dict:
+    async def ingest_file(self, file_path: str, filename: str, user_id: str) -> dict:
         """
-        Background-task compatible ingestion.
-        1. PDF / TXT parsing  (blocking → executor)
-        2. Recursive character chunking  (blocking → executor)
-        3. Embedding + FAISS upsert  (lock-guarded, executor)
+        Ingests a file into a specific USER'S vector store.
         """
         if not self.embeddings:
-            raise RuntimeError("Service not initialised – missing GOOGLE_API_KEY.")
+            raise RuntimeError("Service not initialized.")
 
         t0 = time.perf_counter()
-        print(f"📥 Ingestion started: {filename}")
+        print(f"📥 Ingestion started for {user_id}: {filename}")
 
         try:
             docs = await asyncio.to_thread(self._load_document, file_path, filename)
-
+            
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200,
-                separators=["\n\n", "\n", ". ", " ", ""],
+                chunk_size=1000, chunk_overlap=200, separators=["\n\n", "\n", ". ", " ", ""]
             )
             splits = await asyncio.to_thread(text_splitter.split_documents, docs)
 
-            print(f"   ↳ {filename}: {len(splits)} chunks created")
-
             async with self.lock:
-                await asyncio.to_thread(self.vector_store.add_documents, splits)
-                await asyncio.to_thread(self.vector_store.save_local, VECTOR_STORE_PATH)
+                vs = await self.get_vector_store(user_id)
+                await asyncio.to_thread(vs.add_documents, splits)
+                
+                # Save to user specific path
+                store_path = self._get_user_store_path(user_id)
+                await asyncio.to_thread(vs.save_local, store_path)
 
             elapsed = round(time.perf_counter() - t0, 2)
             record = {
                 "filename": filename,
                 "chunks": len(splits),
-                "elapsed_s": elapsed,
+                "timestamp": time.time(),
                 "status": "success",
             }
-            self._ingested_files.append(record)
-            print(f"✅ Ingested {filename} ({len(splits)} chunks) in {elapsed}s")
+            
+            # Update user file list
+            if user_id not in self._user_files: self._user_files[user_id] = []
+            self._user_files[user_id].append(record)
+            
+            # Persist metadata
+            try:
+                with open(os.path.join(self._get_user_store_path(user_id), "files.json"), "w") as f:
+                    json.dump(self._user_files[user_id], f)
+            except Exception as e:
+                print(f"Error saving metadata: {e}")
+
+            print(f"✅ Ingested {filename} for {user_id} in {elapsed}s")
             return record
 
         except Exception as e:
-            print(f"❌ Ingestion error for {filename}: {e}")
-            record = {"filename": filename, "status": "error", "error": str(e)}
-            self._ingested_files.append(record)
-            return record
+            print(f"❌ Ingestion error: {e}")
+            return {"filename": filename, "status": "error", "error": str(e)}
+
+    # ──────────────────────────── Retrieval ────────────────────────────
+
+    async def stream_rag_response(self, query: str, user_id: str) -> AsyncGenerator[str, None]:
+        if not self.embeddings:
+            yield f"data: {json.dumps({'type': 'content', 'content': 'System initializing...'})}\n\n"
+            return
+            
+        try:
+             # Ensure user index exists
+             vs = await self.get_vector_store(user_id)
+             retriever = vs.as_retriever(search_kwargs={"k": 5})
+             
+             # 1. Retrieve
+             docs = await asyncio.to_thread(retriever.get_relevant_documents, query)
+             
+             if not docs:
+                 yield f"data: {json.dumps({'type': 'content', 'content': 'I do not have any documents related to this query yet. Please upload some.'})}\n\n"
+                 return
+                 
+             context = "\n\n".join([d.page_content for d in docs])
+             
+             # 2. Setup Gemini Model
+             model = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.3, google_api_key=os.environ["GOOGLE_API_KEY"])
+             
+             # 3. Construct Prompt
+             system_prompt = f"""
+             You are a helpful and precise RAG assistant. Use only the provided context to answer the user's question.
+             If the answer is not in the context, say "I cannot find the answer in the provided documents."
+             
+             Context:
+             {context}
+             
+             Question: {query}
+             """
+             
+             # 4. Stream Response
+             async for chunk in model.astream(system_prompt):
+                 if chunk.content:
+                     yield f"data: {json.dumps({'type': 'content', 'content': chunk.content})}\n\n"
+                     
+             # 5. Send Citations
+             sources = list(set([f"{d.metadata.get('source', 'Unknown')} (Pg {d.metadata.get('page', 0)})" for d in docs]))
+             yield f"data: {json.dumps({'type': 'citations', 'citations': sources})}\n\n"
+             
+        except Exception as e:
+            print(f"Streaming error: {e}")
+            yield f"data: {json.dumps({'type': 'content', 'content': f'Error generating response: {str(e)}'})}\n\n"
+
+    def get_ingested_files(self, user_id: str = None) -> list[dict]:
+        return self._user_files.get(user_id, [])
 
     def _load_document(self, file_path: str, filename: str):
+         # ... existing implementation ...
         if filename.lower().endswith(".pdf"):
             loader = PyPDFLoader(file_path)
         else:
             loader = TextLoader(file_path, autodetect_encoding=True)
-
-        docs = loader.load()
+        return loader.load()
 
         for d in docs:
             d.metadata["source"] = filename

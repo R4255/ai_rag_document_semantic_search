@@ -8,6 +8,21 @@ import { Bot, Sparkles, Cpu } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
+// Generate distinct session/client ID for multi-tenancy without login
+const getClientId = () => {
+  let id = localStorage.getItem('nexus_client_id');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('nexus_client_id', id);
+  }
+  return id;
+};
+
+const CLIENT_ID = getClientId();
+
+// Configure global Axios defaults so every request sends the ID
+axios.defaults.headers.common['X-User-ID'] = CLIENT_ID;
+
 function App() {
   const [cacheStats, setCacheStats] = useState({ hits: 0, misses: 0, size: 0, capacity: 0 });
   const [documents, setDocuments] = useState<any[]>([]);

@@ -58,18 +58,22 @@ class ChatRequest(BaseModel):
     query: str
 
 
-# ──────────────────────────── Upload Endpoint ────────────────────────────
+from typing import Annotated
+from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException, Header
+# ...existing code...
 
 @app.post("/api/upload")
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    x_user_id: Annotated[str | None, Header()] = None
 ):
     """
     Non-blocking document upload.
     The file is immediately saved to a temp path and
-    vectorisation happens as a **background task** (CDC‑style).
+    vectorisation happens as a **background task** (CDC-style).
     """
+    user_id = x_user_id or "unknown"
     allowed = {"application/pdf", "text/plain"}
     # Some browsers send different MIME types for .txt
     if file.content_type not in allowed and not file.filename.endswith((".pdf", ".txt")):
@@ -79,7 +83,7 @@ async def upload_document(
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
 
-    background_tasks.add_task(_process_upload, tmp_path, file.filename)
+    background_tasks.add_task(_process_upload, tmp_path, file.filename, user_id)
 
     return {
         "status": "accepted",
@@ -88,9 +92,9 @@ async def upload_document(
     }
 
 
-async def _process_upload(file_path: str, filename: str):
+async def _process_upload(file_path: str, filename: str, user_id: str):
     try:
-        await rag_service.ingest_file(file_path, filename)
+        await rag_service.ingest_file(file_path, filename, user_id)
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -99,18 +103,24 @@ async def _process_upload(file_path: str, filename: str):
 # ──────────────────────────── Chat / SSE Endpoint ────────────────────────────
 
 @app.post("/api/chat")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(
+    request: ChatRequest,
+    x_user_id: Annotated[str | None, Header()] = None
+):
     """
     SSE streaming endpoint.
     1. Check LRU cache → instant replay on cache hit.
     2. On miss → run full RAG pipeline and cache result.
     """
+    user_id = x_user_id or "unknown"
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
     # ── Cache hit path ──
-    cached = await semantic_cache.get(query)
+    # Cache key must now include user_id to prevent data leaks!
+    cache_key = f"{user_id}:{query}"
+    cached = await semantic_cache.get(cache_key)
     if cached:
         async def _cached_stream():
             yield f"data: {json.dumps({'type': 'cache_hit'})}\n\n"
@@ -126,11 +136,16 @@ async def chat_stream(request: ChatRequest):
     async def _live_stream():
         full_answer = ""
         citations = []
-
-        async for chunk in rag_service.stream_rag_response(query):
+        
+        # Pass user_id to RAG service
+        async for chunk in rag_service.stream_rag_response(query, user_id):
             yield chunk
             try:
-                payload = json.loads(chunk.removeprefix("data: ").strip())
+                if chunk.strip().startswith("data: "):
+                    payload = json.loads(chunk.strip()[6:])
+                else:
+                    payload = json.loads(chunk)
+
                 if payload.get("type") == "content":
                     full_answer += payload.get("content", "")
                 elif payload.get("type") == "citations":
@@ -140,7 +155,7 @@ async def chat_stream(request: ChatRequest):
 
         if full_answer:
             await semantic_cache.set(
-                query, {"answer": full_answer, "citations": citations}, ttl=3600,
+                cache_key, {"answer": full_answer, "citations": citations}, ttl=3600,
             )
 
     return StreamingResponse(_live_stream(), media_type="text/event-stream")
@@ -155,9 +170,11 @@ async def get_cache_stats():
 
 
 @app.get("/api/documents")
-async def list_documents():
+async def list_documents(x_user_id: Annotated[str | None, Header()] = None):
     """Return metadata for every document ingested so far."""
-    return {"documents": rag_service.get_ingested_files()}
+    user_id = x_user_id or "unknown"
+    return {"documents": rag_service.get_ingested_files(user_id)}
+
 
 
 @app.get("/api/health")

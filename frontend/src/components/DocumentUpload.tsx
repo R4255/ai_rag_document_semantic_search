@@ -27,6 +27,7 @@ export default function DocumentUpload({ onUploadSuccess }: Props) {
         formData.append('file', file);
 
         try {
+            // X-User-ID header is set globally in App.tsx
             const response = await axios.post(`${API}/api/upload`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });

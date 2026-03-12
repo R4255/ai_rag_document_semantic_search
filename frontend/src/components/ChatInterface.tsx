@@ -47,10 +47,15 @@ export default function ChatInterface() {
         // Initial placeholder for assistant message
         setMessages(prev => [...prev, { role: 'assistant', content: '', citations: [] }]);
 
+        const clientId = localStorage.getItem('nexus_client_id') || 'unknown';
+
         try {
             const response = await fetch(`${API}/api/chat`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-User-ID': clientId 
+                },
                 body: JSON.stringify({ query }),
             });
 
