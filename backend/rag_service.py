@@ -17,7 +17,7 @@ VECTOR_STORE_PATH = "./faiss_store"
 class RAGService:
     """
     Core RAG Service Engine.
-    - Uses Google Gemini (gemini-2.0-flash) for both embeddings and LLM inference.
+    - Uses Google Gemini (gemini-3-flash) for both embeddings and LLM inference.
     - FAISS as the local vector store (no external infra needed).
     - Full async pipeline: file I/O, chunking, embedding, retrieval, and streaming
       are all run via asyncio.to_thread to keep the event loop non-blocking.
@@ -162,7 +162,7 @@ class RAGService:
 
         context_text = "\n\n---\n\n".join(context_parts)
 
-        # 3. LLM Chain  –  Gemini 2.0 Flash
+        # 3. LLM Chain  –  Gemini 3 Flash 
         llm = ChatGoogleGenerativeAI(
             model="gemini-3-flash-preview",
             streaming=True,

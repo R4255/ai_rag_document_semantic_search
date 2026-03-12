@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Nexus RAG — Intelligent Document QA",
     description=(
-        "Production‑grade RAG micro‑service powered by **Google Gemini 2.0 Flash**, "
+        "Production‑grade RAG micro‑service powered by **Google Gemini 3 Flash **, "
         "FAISS vector search, LRU semantic caching, async background ingestion, "
         "and real‑time SSE streaming."
     ),
@@ -164,7 +164,7 @@ async def list_documents():
 async def health():
     return {
         "status": "healthy",
-        "engine": "Gemini 2.0 Flash",
+        "engine": "Gemini 3 Flash ",
         "vector_store": "FAISS (local)",
         "cache": "AsyncLRU",
     }

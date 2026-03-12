@@ -1,6 +1,6 @@
 # 🧠 Nexus RAG — Intelligent Document QA Engine
 
-A **production-grade** Retrieval-Augmented Generation (RAG) micro-service powered by **Google Gemini 2.0 Flash**, FAISS vector search, **LRU semantic caching**, asynchronous background ingestion, and **real-time SSE streaming** — all wrapped in a premium React dashboard.
+A **production-grade** Retrieval-Augmented Generation (RAG) micro-service powered by **Google Gemini 3 Flash **, FAISS vector search, **LRU semantic caching**, asynchronous background ingestion, and **real-time SSE streaming** — all wrapped in a premium React dashboard.
 
 > Built to demonstrate full-stack AI engineering: from async pipeline architecture to live citation-backed inference.
 
@@ -36,7 +36,7 @@ A **production-grade** Retrieval-Augmented Generation (RAG) micro-service powere
                          │  └────┬────┘  └─────┬─────┘  └───────┘   │
                          │       │             │                     │
                          │  ┌────▼─────────────▼───────┐             │
-                         │  │  Gemini 2.0 Flash (LLM)  │             │
+                         │  │  Gemini 3 Flash  (LLM)  │             │
                          │  │  + Citation Extraction    │             │
                          │  └──────────────────────────┘             │
                          └──────────────────────────────────────────┘
@@ -48,7 +48,7 @@ A **production-grade** Retrieval-Augmented Generation (RAG) micro-service powere
 
 | Layer | Technology |
 |-------|-----------|
-| **LLM** | Google Gemini 2.0 Flash (`gemini-2.0-flash`) |
+| **LLM** | Google Gemini 3 Flash  (`gemini-3-flash`) |
 | **Embeddings** | Google Generative AI Embeddings (`embedding-001`) |
 | **Framework** | FastAPI, Python AsyncIO |
 | **Vector DB** | FAISS (local, zero-infra) |

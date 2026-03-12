@@ -6,7 +6,7 @@ import CacheStats from './components/CacheStats';
 import DocumentList from './components/DocumentList';
 import { Bot, Sparkles, Cpu } from 'lucide-react';
 
-const API = 'http://127.0.0.1:8000';
+const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 function App() {
   const [cacheStats, setCacheStats] = useState({ hits: 0, misses: 0, size: 0, capacity: 0 });
@@ -39,7 +39,7 @@ function App() {
             <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
               Nexus RAG
             </h1>
-            <span className="text-[10px] text-gray-500 font-mono">v2.0 • Gemini 2.0 Flash</span>
+            <span className="text-[10px] text-gray-500 font-mono">v2.0 • Gemini 3 Flash </span>
           </div>
         </div>
 
@@ -85,7 +85,7 @@ function App() {
         <header className="h-14 flex items-center px-8 border-b border-white/5 bg-surface/50 backdrop-blur-md sticky top-0 z-10">
           <Bot className="w-5 h-5 mr-3 text-secondary" />
           <span className="font-semibold text-gray-200">Semantic Search Assistant</span>
-          <span className="ml-auto text-[10px] text-gray-600 font-mono">gemini-2.0-flash • top-k=5 • LRU cached</span>
+          <span className="ml-auto text-[10px] text-gray-600 font-mono">gemini-3-flash • top-k=5 • LRU cached</span>
         </header>
         <div className="flex-1 overflow-hidden relative">
           <ChatInterface />
