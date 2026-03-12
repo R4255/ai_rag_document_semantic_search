@@ -8,6 +8,8 @@ interface Props {
     onUploadSuccess?: () => void;
 }
 
+const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export default function DocumentUpload({ onUploadSuccess }: Props) {
     const [status, setStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
     const [filename, setFilename] = useState('');
@@ -25,20 +27,22 @@ export default function DocumentUpload({ onUploadSuccess }: Props) {
         formData.append('file', file);
 
         try {
-            const response = await axios.post('http://127.0.0.1:8000/api/upload', formData, {
+            const response = await axios.post(`${API}/api/upload`, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
 
             if (response.status === 200) {
+                // Ensure explicit "success" status for visual feedback
                 setStatus('success');
                 onUploadSuccess?.();
-                setTimeout(() => setStatus('idle'), 4000);
             }
         } catch (e: any) {
             console.error(e);
             setErrorMsg(e?.response?.data?.detail || 'Upload failed');
             setStatus('error');
-            setTimeout(() => setStatus('idle'), 5000);
+        } finally {
+             // Reset status after a delay so the user sees the result
+             setTimeout(() => setStatus('idle'), 4000);
         }
     }, [onUploadSuccess]);
 

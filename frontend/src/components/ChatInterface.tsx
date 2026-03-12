@@ -3,6 +3,7 @@ import { Send, Zap, BookOpen, User, FastForward, Layers } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion } from 'framer-motion';
+import axios from 'axios';
 
 type Message = {
     role: 'user' | 'assistant';
@@ -10,6 +11,8 @@ type Message = {
     citations: any[];
     cacheHit?: boolean;
 };
+
+const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 export default function ChatInterface() {
     const [messages, setMessages] = useState<Message[]>([]);
@@ -20,6 +23,17 @@ export default function ChatInterface() {
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
+
+    useEffect(() => {
+        // Poll for cache updates while chatting
+        const poll = setInterval(async () => {
+             try {
+                // Trigger a cache stats update if available
+                await axios.get(`${API}/api/cache/stats`); 
+             } catch(e) {}
+        }, 2000);
+        return () => clearInterval(poll);
+    }, []);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -34,10 +48,10 @@ export default function ChatInterface() {
         setMessages(prev => [...prev, { role: 'assistant', content: '', citations: [] }]);
 
         try {
-            const response = await fetch('http://127.0.0.1:8000/api/chat', {
+            const response = await fetch(`${API}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query })
+                body: JSON.stringify({ query }),
             });
 
             if (!response.body) throw new Error('No response body');

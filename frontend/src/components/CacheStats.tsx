@@ -11,8 +11,20 @@ interface StatsProps {
 }
 
 export default function CacheStats({ stats }: StatsProps) {
-    const hitRate = stats.hits + stats.misses > 0
-        ? Math.round((stats.hits / (stats.hits + stats.misses)) * 100)
+    if (!stats || typeof stats.size === 'undefined') {
+        return (
+            <div className="text-gray-500 text-xs p-4 border border-white/5 rounded-xl bg-surface/50">
+                Waiting for metrics...
+            </div>
+        );
+    }
+    
+    // Fallback capacity to 500 if zero to avoid division by zero
+    const safeCapacity = stats.capacity || 500;
+    const safeSize = stats.size || 0;
+    const usagePercent = Math.min((safeSize / safeCapacity) * 100, 100);
+    const hitRate = (stats.hits + stats.misses) > 0 
+        ? Math.round((stats.hits / (stats.hits + stats.misses)) * 100) 
         : 0;
 
     return (
@@ -23,7 +35,7 @@ export default function CacheStats({ stats }: StatsProps) {
                         <Target className="w-4 h-4 mr-1 text-green-400" />
                         <span className="text-xs uppercase font-medium tracking-wide">Hits</span>
                     </div>
-                    <span className="text-2xl font-bold font-mono text-gray-200">{stats.hits}</span>
+                    <span className="text-2xl font-bold font-mono text-gray-200">{stats.hits || 0}</span>
                 </div>
 
                 <div className="bg-surface/50 p-4 rounded-xl border border-white/5 flex flex-col justify-between hover:bg-surface/80 transition-colors">
@@ -31,7 +43,7 @@ export default function CacheStats({ stats }: StatsProps) {
                         <Activity className="w-4 h-4 mr-1 text-red-400" />
                         <span className="text-xs uppercase font-medium tracking-wide">Misses</span>
                     </div>
-                    <span className="text-2xl font-bold font-mono text-gray-200">{stats.misses}</span>
+                    <span className="text-2xl font-bold font-mono text-gray-200">{stats.misses || 0}</span>
                 </div>
             </div>
 
@@ -41,13 +53,13 @@ export default function CacheStats({ stats }: StatsProps) {
                         <Database className="w-4 h-4 mr-2 text-primary" /> Memory Usage
                     </div>
                     <span className="text-xs font-mono bg-gray-800 px-2 py-0.5 rounded text-gray-300">
-                        {stats.size} / {stats.capacity}
+                        {safeSize} / {safeCapacity}
                     </span>
                 </div>
                 <div className="w-full bg-black/40 h-2 rounded-full overflow-hidden relative z-10">
                     <div
                         className="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-500 ease-out"
-                        style={{ width: `${(stats.size / (stats.capacity || 100)) * 100}%` }}
+                        style={{ width: `${usagePercent}%` }}
                     />
                 </div>
                 <div className="mt-3 text-[10px] text-gray-500 italic relative z-10">
