@@ -126,16 +126,17 @@ export default function ChatInterface() {
     };
 
     return (
-        <div className="flex flex-col h-full bg-surface relative">
-            <div className="flex-1 overflow-y-auto p-8 space-y-6 pb-32">
+        <div className="h-full flex flex-col min-h-0 bg-surface">
+            {/* Scrollable messages */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-8 py-4 md:py-8 space-y-6">
                 {messages.length === 0 && (
-                    <div className="h-full flex flex-col items-center justify-center text-center opacity-70">
+                    <div className="h-full flex flex-col items-center justify-center text-center opacity-70 p-4">
                         <Zap className="w-16 h-16 text-primary mb-6 animate-pulse" />
-                        <h3 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-200 to-gray-500 mb-2">
+                        <h3 className="text-xl md:text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-200 to-gray-500 mb-2">
                             Waiting for query...
                         </h3>
-                        <p className="text-sm text-gray-500 max-w-sm">
-                            Upload documents on the left, then ask questions here. The system uses LRU semantic caching to accelerate redundant questions.
+                        <p className="text-xs md:text-sm text-gray-500 max-w-sm">
+                            Upload documents on the left, then ask questions here.
                         </p>
                     </div>
                 )}
@@ -147,18 +148,18 @@ export default function ChatInterface() {
                         animate={{ opacity: 1, y: 0 }}
                         className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
-                        <div className={`flex max-w-[80%] space-x-4 ${msg.role === 'user' ? 'flex-row-reverse space-x-reverse' : ''}`}>
-                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg ${msg.role === 'user'
+                        <div className={`flex w-full xl:max-w-[80%] space-x-3 md:space-x-4 ${msg.role === 'user' ? 'flex-row-reverse space-x-reverse' : ''}`}>
+                            <div className={`w-8 h-8 md:w-10 md:h-10 rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg ${msg.role === 'user'
                                 ? 'bg-gray-800 border border-gray-700'
                                 : 'bg-gradient-to-br from-primary to-secondary'
                                 }`}>
                                 {msg.role === 'user' ? <User className="w-5 h-5 text-gray-300" /> : <Layers className="w-5 h-5 text-white" />}
                             </div>
 
-                            <div className={`flex flex-col space-y-3 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                                <div className={`px-6 py-4 rounded-2xl shadow-sm ${msg.role === 'user' ? 'bg-primary/10 border border-primary/20 text-gray-200' : 'bg-[#181825] border border-white/5 text-gray-300'
+                            <div className={`flex flex-col space-y-3 max-w-[85%] md:max-w-[90%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                <div className={`px-4 py-3 md:px-6 md:py-4 rounded-2xl shadow-sm ${msg.role === 'user' ? 'bg-primary/10 border border-primary/20 text-gray-200' : 'bg-[#181825] border border-white/5 text-gray-300'
                                     }`}>
-                                    <div className="prose prose-invert prose-p:leading-relaxed max-w-none text-sm">
+                                    <div className="prose prose-invert prose-sm md:prose-base prose-p:leading-relaxed max-w-none">
                                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                             {msg.content || (isLoading && i === messages.length - 1 ? '...' : '')}
                                         </ReactMarkdown>
@@ -176,11 +177,11 @@ export default function ChatInterface() {
                                         <div className="flex items-center text-xs text-gray-500 mb-2 uppercase tracking-wide font-semibold ml-1">
                                             <BookOpen className="w-3 h-3 mr-1" /> Sources
                                         </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 w-full">
+                                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 w-full">
                                             {msg.citations.map((cit, idx) => (
-                                                <div key={idx} className="bg-background/80 hover:bg-background border border-white/5 rounded-lg p-3 text-xs text-gray-400 transition-colors shadow-sm">
+                                                <div key={idx} className="bg-background/80 hover:bg-background border border-white/5 rounded-lg p-3 text-[11px] md:text-xs text-gray-400 transition-colors shadow-sm">
                                                     <span className="font-semibold text-gray-300 mb-1 block">📌 {cit.source} (Pg {cit.page})</span>
-                                                    <span className="line-clamp-2 italic opacity-80">"{cit.snippet}"</span>
+                                                    <span className="line-clamp-3 italic opacity-80">"{cit.snippet}"</span>
                                                 </div>
                                             ))}
                                         </div>
@@ -193,21 +194,22 @@ export default function ChatInterface() {
                 <div ref={bottomRef} />
             </div>
 
-            <div className="absolute bottom-0 w-full p-6 bg-gradient-to-t from-surface via-surface to-transparent">
-                <form onSubmit={handleSubmit} className="max-w-4xl mx-auto relative group">
+            {/* Sticky input bar */}
+            <div className="sticky bottom-0 z-20 bg-gradient-to-t from-background via-background/95 to-transparent px-4 md:px-8 pt-4 pb-[max(12px,env(safe-area-inset-bottom))]">
+                <form onSubmit={handleSubmit} className="relative max-w-4xl mx-auto">
                     <input
                         type="text"
-                        className="w-full bg-[#1e1e2d] border border-white/10 rounded-full px-6 py-4 pr-16 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary/50 shadow-2xl transition-all group-hover:border-white/20"
-                        placeholder="Ask anything..."
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
+                        className="w-full bg-[#1e1e2d] border border-white/10 rounded-full px-6 py-4 pr-16 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary/50 shadow-2xl"
+                        placeholder="Ask anything..."
                         autoComplete="off"
                         disabled={isLoading}
                     />
                     <button
                         type="submit"
                         disabled={isLoading || !input.trim()}
-                        className="absolute right-2 top-2 bottom-2 aspect-square rounded-full bg-primary flex items-center justify-center text-white hover:bg-secondary disabled:opacity-50 disabled:hover:bg-primary transition-colors cursor-pointer"
+                        className="absolute right-2 top-2 bottom-2 aspect-square rounded-full bg-primary flex items-center justify-center text-white hover:bg-secondary disabled:opacity-50 disabled:hover:bg-primary transition-colors"
                     >
                         {isLoading ? <Zap className="w-5 h-5 animate-pulse" /> : <Send className="w-5 h-5 ml-1" />}
                     </button>
