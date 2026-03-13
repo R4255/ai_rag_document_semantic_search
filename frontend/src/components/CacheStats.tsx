@@ -23,9 +23,9 @@ export default function CacheStats({ stats }: StatsProps) {
     const safeCapacity = stats.capacity || 500;
     const safeSize = stats.size || 0;
     const usagePercent = Math.min((safeSize / safeCapacity) * 100, 100);
-    const hitRate = (stats.hits + stats.misses) > 0 
-        ? Math.round((stats.hits / (stats.hits + stats.misses)) * 100) 
-        : 0;
+    // const hitRate = (stats.hits + stats.misses) > 0 
+    //     ? Math.round((stats.hits / (stats.hits + stats.misses)) * 100) 
+    //     : 0;
 
     return (
         <div className="space-y-4">
