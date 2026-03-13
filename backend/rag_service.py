@@ -159,7 +159,7 @@ class RAGService:
              retriever = vs.as_retriever(search_kwargs={"k": 5})
              
              # 1. Retrieve
-             docs = await asyncio.to_thread(retriever.get_relevant_documents, query)
+             docs = await asyncio.to_thread(retriever.invoke, query)
              
              if not docs:
                  yield f"data: {json.dumps({'type': 'content', 'content': 'I do not have any documents related to this query yet. Please upload some.'})}\n\n"
@@ -168,7 +168,7 @@ class RAGService:
              context = "\n\n".join([d.page_content for d in docs])
              
              # 2. Setup Gemini Model
-             model = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.3, google_api_key=os.environ["GOOGLE_API_KEY"])
+             model = ChatGoogleGenerativeAI(model="gemini-3-flash-preview", temperature=0.3, google_api_key=os.environ["GOOGLE_API_KEY"])
              
              # 3. Construct Prompt
              system_prompt = f"""
@@ -184,26 +184,69 @@ class RAGService:
              # 4. Stream Response
              async for chunk in model.astream(system_prompt):
                  if chunk.content:
-                     yield f"data: {json.dumps({'type': 'content', 'content': chunk.content})}\n\n"
+                     # --- FIX 1: Guarantee string content ---
+                     text_content = chunk.content
+                     if isinstance(text_content, list):
+                         text_content = "".join([str(t.get("text", t)) if isinstance(t, dict) else str(t) for t in text_content])
+                     elif not isinstance(text_content, str):
+                         text_content = str(text_content)
+                         
+                     yield f"data: {json.dumps({'type': 'content', 'content': text_content})}\n\n"
                      
              # 5. Send Citations
-             sources = list(set([f"{d.metadata.get('source', 'Unknown')} (Pg {d.metadata.get('page', 0)})" for d in docs]))
-             yield f"data: {json.dumps({'type': 'citations', 'citations': sources})}\n\n"
+             sources_dict = {}
+             for d in docs:
+                 # Extract base filename to hide ugly temp paths like /var/folders/.../
+                 raw_source = d.metadata.get('source', 'Unknown')
+                 clean_source = os.path.basename(raw_source) if raw_source != "Unknown" else "Unknown"
+                 
+                 key = f"{clean_source}_{d.metadata.get('page', 0)}"
+                 if key not in sources_dict:
+                     sources_dict[key] = {
+                         "source": clean_source,
+                         "page": d.metadata.get("page", 0),
+                         "snippet": d.page_content[:150].replace("\n", " ") + "..."
+                     }
+                     
+             yield f"data: {json.dumps({'type': 'citations', 'citations': list(sources_dict.values())})}\n\n"
              
         except Exception as e:
             print(f"Streaming error: {e}")
             yield f"data: {json.dumps({'type': 'content', 'content': f'Error generating response: {str(e)}'})}\n\n"
 
+    async def chat(self, query: str, user_id: str):
+        # ...existing code...
+            
+            # Check Semantic Cache
+            cached_response = self._check_cache(query_embedding)
+            if cached_response:
+                yield f"data: {json.dumps({'type': 'content', 'content': cached_response['answer']})}\n\n"
+                yield f"data: {json.dumps({'type': 'citations', 'citations': cached_response['citations']})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            # --- FIX: Use .invoke() instead of .get_relevant_documents() ---
+            print(f"🔍 [RAG] Searching vector store for: {query}")
+            retriever = self.vector_stores[user_id].as_retriever(search_kwargs={"k": 5})
+            
+            # docs = retriever.get_relevant_documents(query) # <--- DELETE THIS
+            docs = retriever.invoke(query)                   # <--- ADD THIS
+            
+            # Prepare context
+            context_text = "\n\n".join([doc.page_content for doc in docs])
+            
+            # Stream response
+            # ...existing code...
+
     def get_ingested_files(self, user_id: str = None) -> list[dict]:
         return self._user_files.get(user_id, [])
 
     def _load_document(self, file_path: str, filename: str):
-         # ... existing implementation ...
         if filename.lower().endswith(".pdf"):
             loader = PyPDFLoader(file_path)
         else:
             loader = TextLoader(file_path, autodetect_encoding=True)
-        return loader.load()
+        docs = loader.load()
 
         for d in docs:
             d.metadata["source"] = filename
@@ -211,79 +254,6 @@ class RAGService:
 
         return docs
 
-    # ──────────────────────────── RAG Query Pipeline ────────────────────────────
-
-    async def stream_rag_response(self, query: str) -> AsyncGenerator[str, None]:
-        """
-        Full RAG pipeline with SSE-formatted streaming output.
-        Yields JSON lines: { type: "content" | "citations" | "error", ... }
-        """
-        if not self.vector_store:
-            yield f'data: {json.dumps({"type": "error", "content": "Vector DB not initialised. Upload a document first."})}\n\n'
-            return
-
-        # 1. Retrieval
-        retriever = self.vector_store.as_retriever(search_kwargs={"k": 5})
-        docs = await asyncio.to_thread(retriever.invoke, query)
-
-        # 2. Build context with source markers
-        context_parts = []
-        citations = []
-        seen = set()
-        for d in docs:
-            src = d.metadata.get("source", "Unknown")
-            pg = d.metadata.get("page", "?")
-            key = f"{src}::{pg}::{d.page_content[:80]}"
-            if key in seen:
-                continue
-            seen.add(key)
-            context_parts.append(
-                f"[Source: {src}, Page {pg}]\n{d.page_content}"
-            )
-            citations.append({
-                "source": src,
-                "page": pg,
-                "snippet": d.page_content[:250] + ("…" if len(d.page_content) > 250 else ""),
-            })
-
-        context_text = "\n\n---\n\n".join(context_parts)
-
-        # 3. LLM Chain  –  Gemini 3 Flash 
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-3-flash-preview",
-            streaming=True,
-            temperature=0.3,
-            max_output_tokens=2048,
-        )
-        prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "You are a precise AI research assistant. "
-                "Answer the user's question using ONLY the context below. "
-                "Cite sources like [Source: filename, Page X] in your answer where applicable. "
-                "If the answer is not in the context, say so clearly.\n\n"
-                "Context:\n{context}",
-            ),
-            ("human", "{question}"),
-        ])
-
-        chain = prompt | llm | StrOutputParser()
-
-        # 4. Stream chunks as SSE
-        try:
-            async for chunk in chain.astream({"context": context_text, "question": query}):
-                yield f"data: {json.dumps({'type': 'content', 'content': chunk})}\n\n"
-
-            # 5. Append citations payload
-            yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
-
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
-
-    # ──────────────────────────── Metadata helpers ──────────────────────────────
-
-    def get_ingested_files(self) -> list[dict]:
-        return list(self._ingested_files)
 
 
 rag_service = RAGService()

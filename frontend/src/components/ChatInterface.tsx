@@ -64,55 +64,62 @@ export default function ChatInterface() {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let done = false;
+            let buffer = '';
 
             while (!done) {
                 const { value, done: doneReading } = await reader.read();
                 done = doneReading;
-                const chunkValue = decoder.decode(value);
+                const chunkValue = decoder.decode(value, { stream: !done });
+                buffer += chunkValue;
+                
+                // Process complete lines
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || ''; // Keep incomplete line
 
-                // Parse SSE stream
-                const events = chunkValue.split('\n\n');
-                for (const event of events) {
-                    if (event.startsWith('data: ')) {
-                        const dataStr = event.replace('data: ', '');
+                for (const line of lines) {
+                    if (line.trim().startsWith('data: ')) {
+                        const jsonStr = line.replace('data: ', '').trim();
+                        if (jsonStr === '[DONE]') break;
+                        
                         try {
-                            const payload = JSON.parse(dataStr);
-                            if (payload.type === 'content') {
+                            const data = JSON.parse(jsonStr);
+                            
+                            if (data.type === 'content') {
                                 setMessages(prev => {
                                     const newMsgs = [...prev];
-                                    const last = newMsgs[newMsgs.length - 1];
-                                    last.content += payload.content;
+                                    const lastMsg = newMsgs[newMsgs.length - 1];
+                                    if (lastMsg.role === 'assistant') {
+                                        // --- FIX: Safely cast text content ---
+                                        const text = typeof data.content === 'string' 
+                                            ? data.content 
+                                            : JSON.stringify(data.content);
+                                        lastMsg.content += text; 
+                                    }
                                     return newMsgs;
                                 });
-                            } else if (payload.type === 'citations') {
+                            } else if (data.type === 'citations') {
                                 setMessages(prev => {
                                     const newMsgs = [...prev];
-                                    const last = newMsgs[newMsgs.length - 1];
-                                    last.citations = payload.citations;
-                                    return newMsgs;
-                                });
-                            } else if (payload.type === 'cache_hit') {
-                                setMessages(prev => {
-                                    const newMsgs = [...prev];
-                                    const last = newMsgs[newMsgs.length - 1];
-                                    last.cacheHit = true;
+                                    const lastMsg = newMsgs[newMsgs.length - 1];
+                                    if (lastMsg.role === 'assistant') {
+                                        lastMsg.citations = data.citations;
+                                    }
                                     return newMsgs;
                                 });
                             }
-                        } catch (err) {
-                            console.error("Parse err", err, dataStr);
+                        } catch (e) {
+                            console.error("JSON Parse Error", e);
                         }
                     }
                 }
             }
         } catch (error) {
             console.error(error);
-            setMessages(prev => {
-                const newMsgs = [...prev];
-                const last = newMsgs[newMsgs.length - 1];
-                last.content = "Connection error. Ensure the backend is running (`uvicorn app:app`) and GOOGLE_API_KEY is set in .env";
-                return newMsgs;
-            });
+            setMessages(prev => [...prev, { 
+                role: 'assistant', 
+                content: 'Error: Could not fetch response.', 
+                citations: [] 
+            }]);
         } finally {
             setIsLoading(false);
         }

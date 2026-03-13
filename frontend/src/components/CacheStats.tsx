@@ -62,9 +62,9 @@ export default function CacheStats({ stats }: StatsProps) {
                         style={{ width: `${usagePercent}%` }}
                     />
                 </div>
-                <div className="mt-3 text-[10px] text-gray-500 italic relative z-10">
+                {/* <div className="mt-3 text-[10px] text-gray-500 italic relative z-10">
                     *LRU semantic cache with {hitRate}% hit rate reducing LLM load by ~{hitRate}%.
-                </div>
+                </div> */}
             </div>
         </div>
     );
