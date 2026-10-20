@@ -13,3 +13,12 @@ dist/
 
 # OS
 .DS_Store
+
+# Python tooling
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Retrieval eval artifacts
+retrieval/results/
+retrieval/data/scifact/

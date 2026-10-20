@@ -5,17 +5,21 @@ import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
+from typing import Annotated
 
-from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException
+from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-from cache_manager import semantic_cache
-from rag_service import rag_service
+load_dotenv()  # before importing hybrid, which reads RAG_* settings at import time
 
-load_dotenv()
+from cache_manager import semantic_cache
+from hybrid import RERANKER, RETRIEVAL_MODE
+from providers import LLM_PROVIDER, engine_label
+from ragv2 import MODES
+from rag_service import rag_service
 
 
 # ──────────────────────────── Lifespan ────────────────────────────
@@ -23,11 +27,11 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Modern lifespan handler replacing deprecated on_event."""
-    api_key = os.getenv("GOOGLE_API_KEY", "")
-    if api_key:
-        rag_service.initialize(api_key)
-    else:
-        print("⚠️  GOOGLE_API_KEY not found in .env – LLM / embedding features disabled.")
+    try:
+        rag_service.initialize()
+        print(f"🧠 Provider: {engine_label()}")
+    except Exception as e:
+        print(f"⚠️  Could not initialise {LLM_PROVIDER} models – LLM / embedding features disabled: {e}")
     yield  # app runs here
     print("👋 Shutting down Nexus RAG backend.")
 
@@ -35,8 +39,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Nexus RAG — Intelligent Document QA",
     description=(
-        "Production‑grade RAG micro‑service powered by **Google Gemini 3 Flash **, "
-        "FAISS vector search, LRU semantic caching, async background ingestion, "
+        "Production‑grade RAG micro‑service powered by Google Gemini or local Ollama models, "
+        "hybrid BM25 + FAISS retrieval (RRF), LRU semantic caching, async background ingestion, "
         "and real‑time SSE streaming."
     ),
     version="2.0.0",
@@ -58,9 +62,11 @@ class ChatRequest(BaseModel):
     query: str
 
 
-from typing import Annotated
-from fastapi import FastAPI, BackgroundTasks, UploadFile, File, HTTPException, Header
-# ...existing code...
+class SearchRequest(BaseModel):
+    query: str
+    k: int = Field(default=5, ge=1, le=50)
+    mode: str = RETRIEVAL_MODE
+
 
 @app.post("/api/upload")
 async def upload_document(
@@ -120,7 +126,7 @@ async def chat_stream(
     # ── Cache hit path ──
     # Cache key must now include user_id to prevent data leaks!
     cache_key = f"{user_id}:{query}"
-    cached = await semantic_cache.get(cache_key)
+    cached = await semantic_cache.get(cache_key, owner=user_id)
     if cached:
         async def _cached_stream():
             yield f"data: {json.dumps({'type': 'cache_hit'})}\n\n"
@@ -155,18 +161,51 @@ async def chat_stream(
 
         if full_answer:
             await semantic_cache.set(
-                cache_key, {"answer": full_answer, "citations": citations}, ttl=3600,
+                cache_key, {"answer": full_answer, "citations": citations}, ttl=3600, owner=user_id,
             )
 
     return StreamingResponse(_live_stream(), media_type="text/event-stream")
 
 
+# ──────────────────────────── Retrieval-only Endpoint ────────────────────────────
+
+@app.post("/api/search")
+async def search(
+    request: SearchRequest,
+    x_user_id: Annotated[str | None, Header()] = None
+):
+    """Retrieval without generation, for comparing bm25 / dense / hybrid / hybrid_rerank."""
+    user_id = x_user_id or "unknown"
+    if request.mode not in MODES:
+        raise HTTPException(status_code=400, detail=f"mode must be one of {list(MODES)}")
+    if not rag_service.embeddings:
+        raise HTTPException(status_code=503, detail="Service not initialized.")
+    try:
+        result = await rag_service.search(request.query, user_id, k=request.k, mode=request.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "mode": request.mode,
+        "hits": [
+            {
+                "source": h.chunk.meta.get("source"),
+                "page": h.chunk.meta.get("page"),
+                "score": h.score,
+                "retriever": h.source,
+                "text": h.chunk.text,
+            }
+            for h in result.hits
+        ],
+        "timings_ms": result.timings_ms,
+    }
+
+
 # ──────────────────────────── Auxiliary Endpoints ────────────────────────────
 
 @app.get("/api/cache/stats")
-async def get_cache_stats():
-    """Live cache telemetry (hits, misses, utilisation)."""
-    return await semantic_cache.get_stats()
+async def get_cache_stats(x_user_id: Annotated[str | None, Header()] = None):
+    """Live cache telemetry: server-wide totals, plus this user's under "user"."""
+    return await semantic_cache.get_stats(owner=x_user_id or "unknown")
 
 
 @app.get("/api/documents")
@@ -181,7 +220,10 @@ async def list_documents(x_user_id: Annotated[str | None, Header()] = None):
 async def health():
     return {
         "status": "healthy",
-        "engine": "Gemini 3 Flash ",
+        "provider": LLM_PROVIDER,
+        "engine": engine_label(),
         "vector_store": "FAISS (local)",
+        "retrieval": RETRIEVAL_MODE,
+        "reranker": RERANKER,
         "cache": "AsyncLRU",
     }

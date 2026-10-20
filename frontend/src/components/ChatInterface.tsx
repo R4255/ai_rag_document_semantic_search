@@ -3,7 +3,6 @@ import { Send, Zap, BookOpen, User, FastForward, Layers } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion } from 'framer-motion';
-import axios from 'axios';
 
 type Message = {
     role: 'user' | 'assistant';
@@ -19,21 +18,27 @@ export default function ChatInterface() {
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const bottomRef = useRef<HTMLDivElement>(null);
+    // Only auto-scroll while the user is already at the bottom, so they can scroll up mid-stream
+    const stickToBottom = useRef(true);
+
+    const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const el = e.currentTarget;
+        stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
 
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (stickToBottom.current) bottomRef.current?.scrollIntoView({ behavior: 'auto' });
     }, [messages]);
 
-    useEffect(() => {
-        // Poll for cache updates while chatting
-        const poll = setInterval(async () => {
-             try {
-                // Trigger a cache stats update if available
-                await axios.get(`${API}/api/cache/stats`); 
-             } catch(e) {}
-        }, 2000);
-        return () => clearInterval(poll);
-    }, []);
+    // Replace the last assistant message instead of mutating it: StrictMode runs
+    // state updaters twice in dev, so in-place `+=` appended every token twice.
+    const updateLastAssistant = (patch: (msg: Message) => Partial<Message>) => {
+        setMessages(prev => {
+            const last = prev[prev.length - 1];
+            if (!last || last.role !== 'assistant') return prev;
+            return [...prev.slice(0, -1), { ...last, ...patch(last) }];
+        });
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -43,6 +48,7 @@ export default function ChatInterface() {
         setInput('');
         setMessages(prev => [...prev, { role: 'user', content: query, citations: [] }]);
         setIsLoading(true);
+        stickToBottom.current = true;
 
         // Initial placeholder for assistant message
         setMessages(prev => [...prev, { role: 'assistant', content: '', citations: [] }]);
@@ -85,27 +91,15 @@ export default function ChatInterface() {
                             const data = JSON.parse(jsonStr);
                             
                             if (data.type === 'content') {
-                                setMessages(prev => {
-                                    const newMsgs = [...prev];
-                                    const lastMsg = newMsgs[newMsgs.length - 1];
-                                    if (lastMsg.role === 'assistant') {
-                                        // --- FIX: Safely cast text content ---
-                                        const text = typeof data.content === 'string' 
-                                            ? data.content 
-                                            : JSON.stringify(data.content);
-                                        lastMsg.content += text; 
-                                    }
-                                    return newMsgs;
-                                });
+                                // --- FIX: Safely cast text content ---
+                                const text = typeof data.content === 'string'
+                                    ? data.content
+                                    : JSON.stringify(data.content);
+                                updateLastAssistant(msg => ({ content: msg.content + text }));
                             } else if (data.type === 'citations') {
-                                setMessages(prev => {
-                                    const newMsgs = [...prev];
-                                    const lastMsg = newMsgs[newMsgs.length - 1];
-                                    if (lastMsg.role === 'assistant') {
-                                        lastMsg.citations = data.citations;
-                                    }
-                                    return newMsgs;
-                                });
+                                updateLastAssistant(() => ({ citations: data.citations }));
+                            } else if (data.type === 'cache_hit') {
+                                updateLastAssistant(() => ({ cacheHit: true }));
                             }
                         } catch (e) {
                             console.error("JSON Parse Error", e);
@@ -128,7 +122,7 @@ export default function ChatInterface() {
     return (
         <div className="h-full flex flex-col min-h-0 bg-surface">
             {/* Scrollable messages */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-8 py-4 md:py-8 space-y-6">
+            <div onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto px-4 md:px-8 py-4 md:py-8 space-y-6">
                 {messages.length === 0 && (
                     <div className="h-full flex flex-col items-center justify-center text-center opacity-70 p-4">
                         <Zap className="w-16 h-16 text-primary mb-6 animate-pulse" />

@@ -98,7 +98,7 @@ export default function DocumentUpload({ onUploadSuccess }: Props) {
             <div className="bg-surface/40 p-2.5 rounded-lg flex items-center">
                 <FileText className="w-3.5 h-3.5 text-gray-500 mr-2 flex-shrink-0" />
                 <span className="text-[10px] text-gray-500 leading-tight">
-                    PDF / TXT → chunks → Gemini embeddings → FAISS index
+                    PDF / TXT → chunks → embeddings → FAISS + BM25 index
                 </span>
             </div>
         </div>

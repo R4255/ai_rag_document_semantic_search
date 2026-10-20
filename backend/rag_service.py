@@ -2,14 +2,18 @@ import os
 import json
 import asyncio
 import time
+import uuid
 from typing import AsyncGenerator
 
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+
+from ragv2 import Chunk, HybridRetriever
+from hybrid import RETRIEVAL_MODE, SYSTEM_SOURCE, add_chunks, build_user_retriever
+from providers import build_models, store_namespace
 
 VECTOR_STORE_PATH = "./faiss_store"
 
@@ -18,32 +22,28 @@ class RAGService:
     """
     Multi-tenant RAG Service.
     - Manages separate FAISS indices per user_id (session ID).
+    - Pairs each index with a BM25 index; queries fuse both with RRF (see hybrid.py).
     - Caches active indices in memory (LRU style not implemented, simpler dict cache).
     """
 
     def __init__(self):
         self.lock = asyncio.Lock()
         self.embeddings = None
+        self.llm = None
         # Map user_id -> FAISS index
         self.vector_stores: dict[str, FAISS] = {}
+        # Map user_id -> hybrid (BM25 + FAISS) retriever over the same chunks
+        self.retrievers: dict[str, HybridRetriever] = {}
         # Map user_id -> list of ingested files metadata
         self._user_files: dict[str, list[dict]] = {}
 
-    def initialize(self, api_key: str):
-        if not api_key:
-            print("WARNING: GOOGLE_API_KEY NOT SET.")
-            return
-
-        os.environ["GOOGLE_API_KEY"] = api_key
-        self.embeddings = GoogleGenerativeAIEmbeddings(
-            model="gemini-embedding-001",
-            google_api_key=api_key,
-        )
-        print("✅ Embeddings model ready.")
+    def initialize(self):
+        self.embeddings, self.llm = build_models()
+        print("✅ Embeddings + chat models ready.")
 
     def _get_user_store_path(self, user_id: str) -> str:
         safe_id = "".join([c for c in user_id if c.isalnum() or c in "-_"])
-        return os.path.join(VECTOR_STORE_PATH, safe_id)
+        return os.path.join(VECTOR_STORE_PATH, store_namespace(), safe_id)
 
     async def get_vector_store(self, user_id: str):
         """Lazy loads or creates a vector store for a specific user ID."""
@@ -63,6 +63,7 @@ class RAGService:
                     allow_dangerous_deserialization=True
                 )
                 self.vector_stores[user_id] = vs
+                self.retrievers[user_id] = await asyncio.to_thread(build_user_retriever, vs)
                 
                 # Load metadata if exists
                 meta_path = os.path.join(path, "files.json")
@@ -82,9 +83,11 @@ class RAGService:
             FAISS.from_texts,
             ["User space initialization."], 
             self.embeddings,
-            metadatas=[{"source": "system", "page": 0}]
+            metadatas=[{"source": SYSTEM_SOURCE, "page": 0, "chunk_id": SYSTEM_SOURCE}],
+            ids=[SYSTEM_SOURCE],
         )
         self.vector_stores[user_id] = vs
+        self.retrievers[user_id] = build_user_retriever(vs)
         self._user_files[user_id] = []
         
         # Create dir if not exists
@@ -111,10 +114,19 @@ class RAGService:
                 chunk_size=1000, chunk_overlap=200, separators=["\n\n", "\n", ". ", " ", ""]
             )
             splits = await asyncio.to_thread(text_splitter.split_documents, docs)
+            chunks = []
+            for split in splits:
+                chunk_id = uuid.uuid4().hex
+                chunks.append(Chunk(
+                    id=chunk_id,
+                    doc_id=filename,
+                    text=split.page_content,
+                    meta={**split.metadata, "chunk_id": chunk_id},
+                ))
 
             async with self.lock:
                 vs = await self.get_vector_store(user_id)
-                await asyncio.to_thread(vs.add_documents, splits)
+                await asyncio.to_thread(add_chunks, self.retrievers[user_id], chunks)
                 
                 # Save to user specific path
                 store_path = self._get_user_store_path(user_id)
@@ -154,23 +166,18 @@ class RAGService:
             return
             
         try:
-             # Ensure user index exists
-             vs = await self.get_vector_store(user_id)
-             retriever = vs.as_retriever(search_kwargs={"k": 5})
+             # 1. Retrieve (BM25 + dense, fused with RRF)
+             result = await self.search(query, user_id, k=5)
+             hits = result.hits
+             yield f"data: {json.dumps({'type': 'retrieval', 'mode': RETRIEVAL_MODE, 'timings_ms': result.timings_ms})}\n\n"
              
-             # 1. Retrieve
-             docs = await asyncio.to_thread(retriever.invoke, query)
-             
-             if not docs:
+             if not hits:
                  yield f"data: {json.dumps({'type': 'content', 'content': 'I do not have any documents related to this query yet. Please upload some.'})}\n\n"
                  return
                  
-             context = "\n\n".join([d.page_content for d in docs])
+             context = "\n\n".join([h.chunk.text for h in hits])
              
-             # 2. Setup Gemini Model
-             model = ChatGoogleGenerativeAI(model="gemini-3-flash-preview", temperature=0.3, google_api_key=os.environ["GOOGLE_API_KEY"])
-             
-             # 3. Construct Prompt
+             # 2. Construct Prompt
              system_prompt = f"""
              You are a helpful and precise RAG assistant. Use only the provided context to answer the user's question.
              If the answer is not in the context, say "I cannot find the answer in the provided documents."
@@ -181,8 +188,8 @@ class RAGService:
              Question: {query}
              """
              
-             # 4. Stream Response
-             async for chunk in model.astream(system_prompt):
+             # 3. Stream Response
+             async for chunk in self.llm.astream(system_prompt):
                  if chunk.content:
                      # --- FIX 1: Guarantee string content ---
                      text_content = chunk.content
@@ -193,19 +200,20 @@ class RAGService:
                          
                      yield f"data: {json.dumps({'type': 'content', 'content': text_content})}\n\n"
                      
-             # 5. Send Citations
+             # 4. Send Citations
              sources_dict = {}
-             for d in docs:
+             for h in hits:
+                 meta = h.chunk.meta
                  # Extract base filename to hide ugly temp paths like /var/folders/.../
-                 raw_source = d.metadata.get('source', 'Unknown')
+                 raw_source = meta.get('source', 'Unknown')
                  clean_source = os.path.basename(raw_source) if raw_source != "Unknown" else "Unknown"
                  
-                 key = f"{clean_source}_{d.metadata.get('page', 0)}"
+                 key = f"{clean_source}_{meta.get('page', 0)}"
                  if key not in sources_dict:
                      sources_dict[key] = {
                          "source": clean_source,
-                         "page": d.metadata.get("page", 0),
-                         "snippet": d.page_content[:150].replace("\n", " ") + "..."
+                         "page": meta.get("page", 0),
+                         "snippet": h.chunk.text[:150].replace("\n", " ") + "..."
                      }
                      
              yield f"data: {json.dumps({'type': 'citations', 'citations': list(sources_dict.values())})}\n\n"
@@ -214,29 +222,10 @@ class RAGService:
             print(f"Streaming error: {e}")
             yield f"data: {json.dumps({'type': 'content', 'content': f'Error generating response: {str(e)}'})}\n\n"
 
-    async def chat(self, query: str, user_id: str):
-        # ...existing code...
-            
-            # Check Semantic Cache
-            cached_response = self._check_cache(query_embedding)
-            if cached_response:
-                yield f"data: {json.dumps({'type': 'content', 'content': cached_response['answer']})}\n\n"
-                yield f"data: {json.dumps({'type': 'citations', 'citations': cached_response['citations']})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
-            # --- FIX: Use .invoke() instead of .get_relevant_documents() ---
-            print(f"🔍 [RAG] Searching vector store for: {query}")
-            retriever = self.vector_stores[user_id].as_retriever(search_kwargs={"k": 5})
-            
-            # docs = retriever.get_relevant_documents(query) # <--- DELETE THIS
-            docs = retriever.invoke(query)                   # <--- ADD THIS
-            
-            # Prepare context
-            context_text = "\n\n".join([doc.page_content for doc in docs])
-            
-            # Stream response
-            # ...existing code...
+    async def search(self, query: str, user_id: str, k: int = 5, mode: str = RETRIEVAL_MODE):
+        """Run retrieval only; returns a ragv2 SearchResult (hits + per-stage timings_ms)."""
+        await self.get_vector_store(user_id)
+        return await asyncio.to_thread(self.retrievers[user_id].search, query, k, mode)
 
     def get_ingested_files(self, user_id: str = None) -> list[dict]:
         return self._user_files.get(user_id, [])

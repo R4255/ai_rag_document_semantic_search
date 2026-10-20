@@ -8,6 +8,7 @@ python-multipart
 langchain
 langchain-community
 langchain-google-genai
+langchain-ollama
 langchain-text-splitters
 
 # Vector Store
@@ -20,3 +21,6 @@ aiofiles
 # Streaming
 sse-starlette
 httpx
+
+# Hybrid retrieval core (BM25 + RRF + eval), in ../retrieval
+-e ../retrieval

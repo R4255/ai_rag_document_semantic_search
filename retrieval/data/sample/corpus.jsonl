@@ -1,0 +1,16 @@
+{"id": "d01", "text": "Kafka topics are split into partitions; each partition is consumed by at most one consumer in a group, so parallelism is bounded by the partition count."}
+{"id": "d02", "text": "An idempotent consumer can process the same message more than once without changing the result, typically by storing a deduplication key such as an event id in Redis before applying side effects."}
+{"id": "d03", "text": "Change data capture streams row-level changes from a database transaction log to downstream systems, enabling zero-downtime migrations between datastores."}
+{"id": "d04", "text": "CQRS separates the write model from the read model so each can be scaled and optimised independently, with events keeping the read store eventually consistent."}
+{"id": "d05", "text": "Caching hot read paths in Redis reduces database round trips; entries need a TTL and an invalidation strategy to avoid serving stale data."}
+{"id": "d06", "text": "A B-tree index lets PostgreSQL find rows by key in logarithmic time instead of scanning the whole table."}
+{"id": "d07", "text": "Connection pooling reuses a small set of database connections across requests, avoiding the cost of opening a new connection for every query."}
+{"id": "d08", "text": "Raft is a consensus algorithm where a leader replicates a log to followers and an entry is committed once a majority of nodes have stored it."}
+{"id": "d09", "text": "Sharding splits a large table across multiple database nodes by a shard key, so each node holds only a subset of the rows."}
+{"id": "d10", "text": "With asynchronous replication, a read replica can lag behind the primary, so a client may read stale data right after a write."}
+{"id": "d11", "text": "A token bucket rate limiter allows short bursts while enforcing an average request rate by refilling tokens at a fixed speed."}
+{"id": "d12", "text": "Exponential backoff with jitter spaces out retries after failures so that many clients do not hammer a recovering service at the same moment."}
+{"id": "d13", "text": "Approximate nearest neighbour indexes such as HNSW trade a little recall for much faster similarity search over embeddings."}
+{"id": "d14", "text": "BM25 ranks documents by term frequency and inverse document frequency with length normalisation, and works well for exact keyword matches."}
+{"id": "d15", "text": "A cross-encoder reranker reads the query and a passage together and scores relevance more accurately than embeddings, but is too slow to run over a whole corpus."}
+{"id": "d16", "text": "Online schema migrations add a nullable column first, backfill in batches, then add constraints, so the table is never locked for long."}

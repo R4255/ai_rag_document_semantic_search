@@ -1,0 +1,15 @@
+{"id": "q01", "text": "how many consumers can read a kafka topic in parallel", "relevant": ["d01"]}
+{"id": "q02", "text": "how to avoid processing duplicate messages twice", "relevant": ["d02"]}
+{"id": "q03", "text": "migrate a live database without downtime", "relevant": ["d03", "d16"]}
+{"id": "q04", "text": "separate read and write models", "relevant": ["d04"]}
+{"id": "q05", "text": "reduce database round trips on hot endpoints", "relevant": ["d05"]}
+{"id": "q06", "text": "why is my query scanning the full table", "relevant": ["d06"]}
+{"id": "q07", "text": "majority commit leader log replication", "relevant": ["d08"]}
+{"id": "q08", "text": "spread a big table over several servers", "relevant": ["d09"]}
+{"id": "q09", "text": "replica returns old data after write", "relevant": ["d10"]}
+{"id": "q10", "text": "allow bursts but cap average request rate", "relevant": ["d11"]}
+{"id": "q11", "text": "retry storms when a service recovers", "relevant": ["d12"]}
+{"id": "q12", "text": "fast approximate similarity search for embeddings", "relevant": ["d13"]}
+{"id": "q13", "text": "keyword scoring with idf and length normalization", "relevant": ["d14"]}
+{"id": "q14", "text": "more accurate relevance scoring of query passage pairs", "relevant": ["d15"]}
+{"id": "q15", "text": "add a column to a huge table without locking", "relevant": ["d16"]}

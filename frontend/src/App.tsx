@@ -27,16 +27,24 @@ function App() {
   const [cacheStats, setCacheStats] = useState({ hits: 0, misses: 0, size: 0, capacity: 0 });
   const [documents, setDocuments] = useState<any[]>([]);
   const [health, setHealth] = useState<any>(null);
+  const [online, setOnline] = useState<boolean | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
+    const checkHealth = () =>
+      axios.get(`${API}/api/health`, { timeout: 3000 })
+        .then(r => { setHealth(r.data); setOnline(true); })
+        .catch(() => setOnline(false));
+
     const poll = setInterval(() => {
+      checkHealth();
       axios.get(`${API}/api/cache/stats`).then(r => setCacheStats(r.data)).catch(() => { });
       axios.get(`${API}/api/documents`).then(r => setDocuments(r.data.documents || [])).catch(() => { });
     }, 4000);
 
     // Initial fetch
-    axios.get(`${API}/api/health`).then(r => setHealth(r.data)).catch(() => { });
+    checkHealth();
+    axios.get(`${API}/api/cache/stats`).then(r => setCacheStats(r.data)).catch(() => { });
     axios.get(`${API}/api/documents`).then(r => setDocuments(r.data.documents || [])).catch(() => { });
 
     return () => clearInterval(poll);
@@ -94,7 +102,7 @@ function App() {
               <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
                 Nexus RAG
               </h1>
-              <span className="text-[10px] text-gray-500 font-mono">v2.0 • Gemini 3 Flash </span>
+              <span className="text-[10px] text-gray-500 font-mono">v2.0 • {health?.engine || 'Connecting…'}</span>
             </div>
           </div>
 
@@ -123,8 +131,8 @@ function App() {
           {/* Footer */}
           <div className="mt-auto pt-4 border-t border-white/5">
             <div className="flex items-center text-xs text-gray-600 space-x-2">
-              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-              <span>Online</span>
+              <span className={`w-2 h-2 rounded-full ${online === null ? 'bg-gray-500' : online ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+              <span>{online === null ? 'Connecting…' : online ? 'Online' : 'Offline'}</span>
               <span className="text-gray-700">•</span>
               <Cpu className="w-3 h-3" />
               <span>{health?.engine || 'Connecting…'}</span>
@@ -141,7 +149,7 @@ function App() {
         <header className="hidden md:flex sticky top-0 z-30 flex-shrink-0 items-center px-8 py-5 border-b border-white/5 bg-background/70 backdrop-blur-md">
           <Bot className="w-5 h-5 text-primary mr-3" />
           <span className="font-semibold text-gray-200">Semantic Search Assistant</span>
-          <span className="ml-auto text-[10px] text-gray-600 font-mono">gemini-3-flash • top-k=5 • LRU cached</span>
+          <span className="ml-auto text-[10px] text-gray-600 font-mono">{health?.engine || '…'} • {health?.retrieval || 'hybrid'} top-k=5 • LRU cached</span>
         </header>
 
         <div className="flex-1 min-h-0">

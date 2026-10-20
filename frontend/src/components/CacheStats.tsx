@@ -7,6 +7,8 @@ interface StatsProps {
         misses: number;
         size: number;
         capacity: number;
+        // This user's own counters; hits/misses/size above are server-wide
+        user?: { hits: number; misses: number; size: number };
     };
 }
 
@@ -23,6 +25,7 @@ export default function CacheStats({ stats }: StatsProps) {
     const safeCapacity = stats.capacity || 500;
     const safeSize = stats.size || 0;
     const usagePercent = Math.min((safeSize / safeCapacity) * 100, 100);
+    const mine = stats.user ?? { hits: stats.hits, misses: stats.misses, size: safeSize };
     // const hitRate = (stats.hits + stats.misses) > 0 
     //     ? Math.round((stats.hits / (stats.hits + stats.misses)) * 100) 
     //     : 0;
@@ -33,24 +36,24 @@ export default function CacheStats({ stats }: StatsProps) {
                 <div className="bg-surface/50 p-4 rounded-xl border border-white/5 flex flex-col justify-between hover:bg-surface/80 transition-colors">
                     <div className="flex items-center text-gray-500 mb-2">
                         <Target className="w-4 h-4 mr-1 text-green-400" />
-                        <span className="text-xs uppercase font-medium tracking-wide">Hits</span>
+                        <span className="text-xs uppercase font-medium tracking-wide">Your Hits</span>
                     </div>
-                    <span className="text-2xl font-bold font-mono text-gray-200">{stats.hits || 0}</span>
+                    <span className="text-2xl font-bold font-mono text-gray-200">{mine.hits || 0}</span>
                 </div>
 
                 <div className="bg-surface/50 p-4 rounded-xl border border-white/5 flex flex-col justify-between hover:bg-surface/80 transition-colors">
                     <div className="flex items-center text-gray-500 mb-2">
                         <Activity className="w-4 h-4 mr-1 text-red-400" />
-                        <span className="text-xs uppercase font-medium tracking-wide">Misses</span>
+                        <span className="text-xs uppercase font-medium tracking-wide">Your Misses</span>
                     </div>
-                    <span className="text-2xl font-bold font-mono text-gray-200">{stats.misses || 0}</span>
+                    <span className="text-2xl font-bold font-mono text-gray-200">{mine.misses || 0}</span>
                 </div>
             </div>
 
             <div className="bg-surface/50 p-4 rounded-xl border border-white/5 relative overflow-hidden group">
                 <div className="flex justify-between items-center mb-3 relative z-10">
                     <div className="flex items-center text-gray-400 text-xs uppercase font-medium">
-                        <Database className="w-4 h-4 mr-2 text-primary" /> Memory Usage
+                        <Database className="w-4 h-4 mr-2 text-primary" /> Shared Cache
                     </div>
                     <span className="text-xs font-mono bg-gray-800 px-2 py-0.5 rounded text-gray-300">
                         {safeSize} / {safeCapacity}
@@ -61,6 +64,9 @@ export default function CacheStats({ stats }: StatsProps) {
                         className="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-500 ease-out"
                         style={{ width: `${usagePercent}%` }}
                     />
+                </div>
+                <div className="mt-2 text-[10px] text-gray-500 relative z-10">
+                    {mine.size} of these are your answers · server total: {stats.hits} hits / {stats.misses} misses
                 </div>
                 {/* <div className="mt-3 text-[10px] text-gray-500 italic relative z-10">
                     *LRU semantic cache with {hitRate}% hit rate reducing LLM load by ~{hitRate}%.
