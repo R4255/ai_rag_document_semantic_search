@@ -10,7 +10,7 @@ A **production-grade** Retrieval-Augmented Generation (RAG) micro-service powere
 
 | # | Feature | Details |
 |---|---------|---------|
-| 0 | **Hybrid Retrieval (RAG v2)** | BM25 and embedding-based FAISS search run side by side and are fused with Reciprocal Rank Fusion, so exact terms (error codes, IDs, names) and paraphrases are both found. Optional cross-encoder reranking. Per-stage latency is streamed with every answer. Core lives in [`retrieval/`](retrieval/) with its own eval harness (Recall@k, MRR, nDCG). |
+| 0 | **Hybrid Retrieval (RAG v2)** | BM25 and embedding-based FAISS search run side by side and are fused with Reciprocal Rank Fusion, so exact terms (error codes, IDs, names) and paraphrases are both found. Optional cross-encoder reranking. Per-stage latency is streamed with every answer. Core lives in [`retrieval/`](retrieval/) with its own eval harness. On BEIR SciFact: **nDCG@10 0.728** with cross-encoder reranking (735 ms p95), or 0.722 at 13 ms p95 with tuned RRF alone, vs 0.646 for BM25. [Full results](retrieval/README.md#results-scifact-beir-test-split). |
 | 1 | **Source Citations** | Every answer includes verifiable `[Source, Page]` references with context snippets so you can trust every response. |
 | 2 | **Semantic LRU Cache** | Thread-safe `AsyncLRUCache` with TTL eviction — identical queries bypass the LLM entirely, returning in **< 10 ms** with live per-user hit/miss metrics visible in the UI. |
 | 3 | **Async Background Ingestion** | Inspired by CDC / EventBridge patterns — uploads return immediately (HTTP 200), while chunking + embedding + FAISS upsert runs as a FastAPI `BackgroundTask`. |

@@ -23,10 +23,13 @@ def main() -> None:
     p.add_argument("--queries", default=str(root / "data/sample/queries.jsonl"))
     p.add_argument("--embedder", default="hashing", choices=["hashing", "st"])
     p.add_argument("--reranker", default="lexical", choices=["none", "lexical", "cross"])
+    p.add_argument("--cross-model", help="Hugging Face cross-encoder for --reranker cross, e.g. BAAI/bge-reranker-base.")
     p.add_argument("--max-words", type=int, default=120)
     p.add_argument("--overlap", type=int, default=20)
     p.add_argument("--candidates", type=int, default=50, help="Candidates retrieved per index before fusion.")
     p.add_argument("--rrf-k", type=int, default=60, help="RRF rank constant for hybrid modes.")
+    p.add_argument("--weights", type=float, nargs=2, default=[1.0, 1.0], metavar=("BM25", "DENSE"),
+                   help="RRF weights for the bm25 and dense rankings.")
     p.add_argument("--fetch-k", type=int, default=50, help="Results fetched before document-level scoring.")
     p.add_argument("--recall-k", type=int, nargs="+", default=[5, 10], help="Recall cutoffs to report.")
     p.add_argument("--output", help="Optional path for the machine-readable JSON report.")
@@ -35,6 +38,8 @@ def main() -> None:
     retriever = build_retriever(
         args.embedder,
         args.reranker,
+        cross_model=args.cross_model,
+        weights=tuple(args.weights),
         max_words=args.max_words,
         overlap=args.overlap,
         candidates=args.candidates,
