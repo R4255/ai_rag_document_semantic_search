@@ -108,6 +108,19 @@ def test_users_are_isolated(user):
     assert res.hits == []
 
 
+def test_concurrent_first_use_builds_one_retriever():
+    """An upload and a search arriving together must share one retriever; a second copy
+    would overwrite the first and its BM25 would never see the upload's chunks."""
+    svc = _new_service()
+    uid = f"test-{uuid.uuid4()}"
+
+    async def both():
+        return await asyncio.gather(svc.get_retriever(uid), svc.get_retriever(uid))
+
+    first, second = asyncio.run(both())
+    assert first is second is svc.retrievers[uid]
+
+
 def test_failed_ingest_leaves_nothing_behind(tmp_path):
     uid = f"test-{uuid.uuid4()}"
     svc = _new_service()

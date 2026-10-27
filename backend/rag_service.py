@@ -39,6 +39,8 @@ class RAGService:
         self.llm = None
         # Map user_id -> hybrid (BM25 + pgvector) retriever
         self.retrievers: dict[str, HybridRetriever] = {}
+        # Guards first-time builds: two builds for one user would leave a stale BM25 in place
+        self._build_lock = asyncio.Lock()
 
     def initialize(self):
         db.init_db()
@@ -47,10 +49,14 @@ class RAGService:
 
     async def get_retriever(self, user_id: str) -> HybridRetriever:
         """First call per user builds BM25 from their rows; later calls reuse it."""
-        if user_id not in self.retrievers:
-            self.retrievers[user_id] = await asyncio.to_thread(
-                build_user_retriever, self.embeddings, user_id, embed_model_name()
-            )
+        if user_id in self.retrievers:
+            return self.retrievers[user_id]
+        async with self._build_lock:
+            # Re-check: another request may have finished the build while we waited for the lock
+            if user_id not in self.retrievers:
+                self.retrievers[user_id] = await asyncio.to_thread(
+                    build_user_retriever, self.embeddings, user_id, embed_model_name()
+                )
         return self.retrievers[user_id]
 
     # ──────────────────────────── Ingestion Pipeline ────────────────────────────
