@@ -24,6 +24,7 @@ export default function DocumentList({ documents }: Props) {
                             {doc.chunks ? `${doc.chunks} chunks` : ''}
                             {doc.elapsed_s ? ` • ${doc.elapsed_s}s` : ''}
                         </p>
+                        {doc.error && <p className="text-[10px] text-red-400/80 truncate" title={doc.error}>{doc.error}</p>}
                     </div>
                     {doc.status === 'success' ? (
                         <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />

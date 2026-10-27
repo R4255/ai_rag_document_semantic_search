@@ -1,105 +1,63 @@
 import os
 import json
 import asyncio
+import hashlib
 import time
 import uuid
 from typing import AsyncGenerator
 
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
+import db
 from ragv2 import Chunk, HybridRetriever
-from hybrid import RETRIEVAL_MODE, SYSTEM_SOURCE, add_chunks, build_user_retriever
-from providers import build_models, store_namespace
+from hybrid import RETRIEVAL_MODE, add_chunks, build_user_retriever
+from providers import build_models, embed_model_name
 
-VECTOR_STORE_PATH = "./faiss_store"
+NO_TEXT_ERROR = "No text found. Is this a scanned PDF?"
+
+
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
 class RAGService:
     """
     Multi-tenant RAG Service.
-    - Manages separate FAISS indices per user_id (session ID).
-    - Pairs each index with a BM25 index; queries fuse both with RRF (see hybrid.py).
-    - Caches active indices in memory (LRU style not implemented, simpler dict cache).
+    - Stores every user's chunks and vectors in Postgres + pgvector (see db.py).
+    - Pairs dense search with an in-memory BM25 index per user; queries fuse both with RRF (see hybrid.py).
+    - Caches each user's retriever in memory after first use (no eviction yet).
     """
 
     def __init__(self):
         self.lock = asyncio.Lock()
         self.embeddings = None
         self.llm = None
-        # Map user_id -> FAISS index
-        self.vector_stores: dict[str, FAISS] = {}
-        # Map user_id -> hybrid (BM25 + FAISS) retriever over the same chunks
+        # Map user_id -> hybrid (BM25 + pgvector) retriever
         self.retrievers: dict[str, HybridRetriever] = {}
-        # Map user_id -> list of ingested files metadata
-        self._user_files: dict[str, list[dict]] = {}
 
     def initialize(self):
+        db.init_db()
         self.embeddings, self.llm = build_models()
-        print("✅ Embeddings + chat models ready.")
+        print("✅ Database, embeddings and chat model ready.")
 
-    def _get_user_store_path(self, user_id: str) -> str:
-        safe_id = "".join([c for c in user_id if c.isalnum() or c in "-_"])
-        return os.path.join(VECTOR_STORE_PATH, store_namespace(), safe_id)
-
-    async def get_vector_store(self, user_id: str):
-        """Lazy loads or creates a vector store for a specific user ID."""
-        if user_id in self.vector_stores:
-            return self.vector_stores[user_id]
-
-        path = self._get_user_store_path(user_id)
-        
-        # Try loading existing
-        if os.path.exists(path) and os.path.exists(os.path.join(path, "index.faiss")):
-            try:
-                # Running load_local in thread to avoid blocking
-                vs = await asyncio.to_thread(
-                    FAISS.load_local, 
-                    path, 
-                    self.embeddings, 
-                    allow_dangerous_deserialization=True
-                )
-                self.vector_stores[user_id] = vs
-                self.retrievers[user_id] = await asyncio.to_thread(build_user_retriever, vs)
-                
-                # Load metadata if exists
-                meta_path = os.path.join(path, "files.json")
-                if os.path.exists(meta_path):
-                     with open(meta_path, "r") as f:
-                         self._user_files[user_id] = json.load(f)
-                else:
-                     self._user_files[user_id] = []
-                     
-                print(f"✅ Loaded FAISS index for user: {user_id}")
-                return vs
-            except Exception as e:
-                print(f"⚠️ Error loading store for {user_id}, initializing fresh: {e}")
-
-        # Initialize fresh store
-        vs = await asyncio.to_thread(
-            FAISS.from_texts,
-            ["User space initialization."], 
-            self.embeddings,
-            metadatas=[{"source": SYSTEM_SOURCE, "page": 0, "chunk_id": SYSTEM_SOURCE}],
-            ids=[SYSTEM_SOURCE],
-        )
-        self.vector_stores[user_id] = vs
-        self.retrievers[user_id] = build_user_retriever(vs)
-        self._user_files[user_id] = []
-        
-        # Create dir if not exists
-        os.makedirs(path, exist_ok=True)
-        await asyncio.to_thread(vs.save_local, path)
-        return vs
+    async def get_retriever(self, user_id: str) -> HybridRetriever:
+        """First call per user builds BM25 from their rows; later calls reuse it."""
+        if user_id not in self.retrievers:
+            self.retrievers[user_id] = await asyncio.to_thread(
+                build_user_retriever, self.embeddings, user_id, embed_model_name()
+            )
+        return self.retrievers[user_id]
 
     # ──────────────────────────── Ingestion Pipeline ────────────────────────────
 
     async def ingest_file(self, file_path: str, filename: str, user_id: str) -> dict:
         """
-        Ingests a file into a specific USER'S vector store.
+        Ingests a file into a specific USER'S rows.
         """
         if not self.embeddings:
             raise RuntimeError("Service not initialized.")
@@ -107,55 +65,47 @@ class RAGService:
         t0 = time.perf_counter()
         print(f"📥 Ingestion started for {user_id}: {filename}")
 
+        sha = await asyncio.to_thread(_sha256, file_path)
+        doc_id = await asyncio.to_thread(db.create_document, user_id, embed_model_name(), filename, sha)
+        if doc_id is None:
+            print(f"↩️  {filename} is already uploaded for {user_id}; skipped")
+            return {"filename": filename, "status": "duplicate"}
+
         try:
             docs = await asyncio.to_thread(self._load_document, file_path, filename)
-            
+
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000, chunk_overlap=200, separators=["\n\n", "\n", ". ", " ", ""]
             )
             splits = await asyncio.to_thread(text_splitter.split_documents, docs)
+            if not splits:
+                await asyncio.to_thread(db.finish_document, doc_id, 0, "error", NO_TEXT_ERROR)
+                print(f"⚠️  {filename}: {NO_TEXT_ERROR}")
+                return {"filename": filename, "status": "error", "error": NO_TEXT_ERROR}
+
             chunks = []
             for split in splits:
-                chunk_id = uuid.uuid4().hex
+                chunk_id = str(uuid.uuid4())  # hyphenated, the same form Postgres returns
                 chunks.append(Chunk(
                     id=chunk_id,
                     doc_id=filename,
                     text=split.page_content,
-                    meta={**split.metadata, "chunk_id": chunk_id},
+                    meta={**split.metadata, "chunk_id": chunk_id, "document_id": doc_id},
                 ))
 
+            retriever = await self.get_retriever(user_id)
             async with self.lock:
-                vs = await self.get_vector_store(user_id)
-                await asyncio.to_thread(add_chunks, self.retrievers[user_id], chunks)
-                
-                # Save to user specific path
-                store_path = self._get_user_store_path(user_id)
-                await asyncio.to_thread(vs.save_local, store_path)
+                await asyncio.to_thread(add_chunks, retriever, chunks)
+            await asyncio.to_thread(db.finish_document, doc_id, len(chunks), "success")
 
             elapsed = round(time.perf_counter() - t0, 2)
-            record = {
-                "filename": filename,
-                "chunks": len(splits),
-                "timestamp": time.time(),
-                "status": "success",
-            }
-            
-            # Update user file list
-            if user_id not in self._user_files: self._user_files[user_id] = []
-            self._user_files[user_id].append(record)
-            
-            # Persist metadata
-            try:
-                with open(os.path.join(self._get_user_store_path(user_id), "files.json"), "w") as f:
-                    json.dump(self._user_files[user_id], f)
-            except Exception as e:
-                print(f"Error saving metadata: {e}")
-
             print(f"✅ Ingested {filename} for {user_id} in {elapsed}s")
-            return record
+            return {"filename": filename, "chunks": len(chunks), "status": "success"}
 
         except Exception as e:
             print(f"❌ Ingestion error: {e}")
+            # Remove the record and any rows already written, so the same file can be retried.
+            await asyncio.to_thread(db.delete_document, doc_id)
             return {"filename": filename, "status": "error", "error": str(e)}
 
     # ──────────────────────────── Retrieval ────────────────────────────
@@ -224,11 +174,11 @@ class RAGService:
 
     async def search(self, query: str, user_id: str, k: int = 5, mode: str = RETRIEVAL_MODE):
         """Run retrieval only; returns a ragv2 SearchResult (hits + per-stage timings_ms)."""
-        await self.get_vector_store(user_id)
-        return await asyncio.to_thread(self.retrievers[user_id].search, query, k, mode)
+        retriever = await self.get_retriever(user_id)
+        return await asyncio.to_thread(retriever.search, query, k, mode)
 
-    def get_ingested_files(self, user_id: str = None) -> list[dict]:
-        return self._user_files.get(user_id, [])
+    async def get_ingested_files(self, user_id: str) -> list[dict]:
+        return await asyncio.to_thread(db.list_documents, user_id, embed_model_name())
 
     def _load_document(self, file_path: str, filename: str):
         if filename.lower().endswith(".pdf"):

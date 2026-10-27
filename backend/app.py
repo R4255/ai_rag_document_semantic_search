@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # before importing hybrid, which reads RAG_* settings at import time
 
+import db
 from cache_manager import semantic_cache
 from hybrid import RERANKER, RETRIEVAL_MODE
 from providers import LLM_PROVIDER, engine_label
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  Could not initialise {LLM_PROVIDER} models – LLM / embedding features disabled: {e}")
     yield  # app runs here
+    db.close_db()
     print("👋 Shutting down Nexus RAG backend.")
 
 
@@ -40,7 +42,7 @@ app = FastAPI(
     title="Nexus RAG — Intelligent Document QA",
     description=(
         "Production‑grade RAG micro‑service powered by Google Gemini or local Ollama models, "
-        "hybrid BM25 + FAISS retrieval (RRF), LRU semantic caching, async background ingestion, "
+        "hybrid BM25 + pgvector retrieval (RRF), LRU semantic caching, async background ingestion, "
         "and real‑time SSE streaming."
     ),
     version="2.0.0",
@@ -212,17 +214,20 @@ async def get_cache_stats(x_user_id: Annotated[str | None, Header()] = None):
 async def list_documents(x_user_id: Annotated[str | None, Header()] = None):
     """Return metadata for every document ingested so far."""
     user_id = x_user_id or "unknown"
-    return {"documents": rag_service.get_ingested_files(user_id)}
+    if not db.is_ready():
+        return {"documents": []}
+    return {"documents": await rag_service.get_ingested_files(user_id)}
 
 
 
 @app.get("/api/health")
 async def health():
     return {
-        "status": "healthy",
+        "status": "healthy" if db.is_ready() and rag_service.embeddings else "degraded",
         "provider": LLM_PROVIDER,
         "engine": engine_label(),
-        "vector_store": "FAISS (local)",
+        "vector_store": "Postgres + pgvector",
+        "database": "connected" if db.is_ready() else "unavailable",
         "retrieval": RETRIEVAL_MODE,
         "reranker": RERANKER,
         "cache": "AsyncLRU",

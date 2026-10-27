@@ -11,8 +11,10 @@ langchain-google-genai
 langchain-ollama
 langchain-text-splitters
 
-# Vector Store
-faiss-cpu
+# Storage: Postgres + pgvector
+psycopg[binary]
+psycopg-pool
+pgvector
 
 # Document Parsing
 pypdf
