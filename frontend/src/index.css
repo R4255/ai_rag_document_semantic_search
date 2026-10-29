@@ -4,21 +4,34 @@
 
 @layer base {
   body {
-    @apply antialiased bg-background text-gray-100;
+    @apply antialiased bg-paper-200 text-ink-900 font-sans;
+  }
+  button:focus-visible,
+  a:focus-visible,
+  textarea:focus-visible,
+  input:focus-visible {
+    @apply outline-none ring-2 ring-accent-600 ring-offset-2 ring-offset-paper-200;
   }
 }
 
-/* Custom scrollbar for modern look */
 ::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #33334d;
+  background: #c3bcae;
   border-radius: 4px;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: #4f4f7a;
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

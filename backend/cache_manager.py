@@ -54,6 +54,15 @@ class AsyncLRUCache:
                 evicted, _ = self._cache.popitem(last=False)
                 self._owners.pop(evicted, None)
 
+    async def clear_owner(self, owner: str) -> int:
+        """Drop every entry this owner stored; returns how many were removed."""
+        async with self._lock:
+            keys = [k for k, o in self._owners.items() if o == owner]
+            for k in keys:
+                self._cache.pop(k, None)
+                self._owners.pop(k)
+            return len(keys)
+
     def _record(self, owner: Optional[str], hit: bool):
         if hit:
             self._hits += 1
