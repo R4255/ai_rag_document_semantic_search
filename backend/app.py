@@ -4,6 +4,7 @@ import tempfile
 import asyncio
 import json
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -18,12 +19,36 @@ load_dotenv()  # before importing hybrid, which reads RAG_* settings at import t
 import db
 from cache_manager import semantic_cache
 from hybrid import RERANKER, RETRIEVAL_MODE
-from providers import LLM_PROVIDER, engine_label
+from providers import LLM_PROVIDER, engine_label, model_status, warm_models
 from ragv2 import MODES
 from rag_service import rag_service
 
 
 # ──────────────────────────── Lifespan ────────────────────────────
+
+_warmup_task: asyncio.Task | None = None
+
+
+def _warming() -> bool:
+    return _warmup_task is not None and not _warmup_task.done()
+
+
+def _start_warmup() -> None:
+    """Load the Ollama models in the background (one warm-up at a time; no-op for Gemini)."""
+    global _warmup_task
+    if LLM_PROVIDER != "ollama" or _warming():
+        return
+
+    def run():
+        t0 = time.perf_counter()
+        try:
+            warm_models()
+            print(f"🔥 Ollama models warm in {time.perf_counter() - t0:.1f}s")
+        except Exception as e:
+            print(f"⚠️  Could not warm Ollama models: {e}")
+
+    _warmup_task = asyncio.create_task(asyncio.to_thread(run))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,6 +56,7 @@ async def lifespan(app: FastAPI):
     try:
         rag_service.initialize()
         print(f"🧠 Provider: {engine_label()}")
+        _start_warmup()
     except Exception as e:
         print(f"⚠️  Could not initialise {LLM_PROVIDER} models – LLM / embedding features disabled: {e}")
     yield  # app runs here
@@ -91,6 +117,14 @@ async def upload_document(
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
 
+    if db.is_ready() and await rag_service.is_duplicate(tmp_path, user_id):
+        os.remove(tmp_path)
+        return {
+            "status": "duplicate",
+            "filename": file.filename,
+            "message": "This file is already in your library, so it was skipped.",
+        }
+
     background_tasks.add_task(_process_upload, tmp_path, file.filename, user_id)
 
     return {
@@ -144,7 +178,8 @@ async def chat_stream(
     async def _live_stream():
         full_answer = ""
         citations = []
-        
+        failed = False
+
         # Pass user_id to RAG service
         async for chunk in rag_service.stream_rag_response(query, user_id):
             yield chunk
@@ -158,10 +193,12 @@ async def chat_stream(
                     full_answer += payload.get("content", "")
                 elif payload.get("type") == "citations":
                     citations = payload.get("citations", [])
+                elif payload.get("type") == "error":
+                    failed = True
             except Exception:
                 pass
 
-        if full_answer:
+        if full_answer and not failed:  # never replay a failed answer from the cache
             await semantic_cache.set(
                 cache_key, {"answer": full_answer, "citations": citations}, ttl=3600, owner=user_id,
             )
@@ -220,6 +257,33 @@ async def list_documents(x_user_id: Annotated[str | None, Header()] = None):
 
 
 
+@app.delete("/api/documents/{doc_id}")
+async def delete_document(doc_id: uuid.UUID, x_user_id: Annotated[str | None, Header()] = None):
+    """Delete one of the caller's documents, its chunks and vectors, and their cached answers."""
+    user_id = x_user_id or "unknown"
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+    outcome = await rag_service.delete_document(user_id, str(doc_id))
+    if outcome == "missing":
+        raise HTTPException(status_code=404, detail="Document not found.")
+    if outcome == "processing":
+        raise HTTPException(status_code=409, detail="This file is still being indexed. Try again when it's ready.")
+    await semantic_cache.clear_owner(user_id)  # cached answers may cite the deleted file
+    return {"status": "deleted", "id": str(doc_id)}
+
+
+@app.get("/api/document")
+async def document_text(name: str, x_user_id: Annotated[str | None, Header()] = None):
+    """One document's passages in reading order, for the document reader."""
+    user_id = x_user_id or "unknown"
+    if not db.is_ready():
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+    chunks = await rag_service.get_document_chunks(user_id, name)
+    if not chunks:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return {"name": name, "chunks": chunks}
+
+
 @app.get("/api/health")
 async def health():
     return {
@@ -231,4 +295,14 @@ async def health():
         "retrieval": RETRIEVAL_MODE,
         "reranker": RERANKER,
         "cache": "AsyncLRU",
+        # Ollama only: {"chat": bool, "embed": bool}, True = in memory; None for Gemini or Ollama down
+        "models": await asyncio.to_thread(model_status),
+        "warming": _warming(),
     }
+
+
+@app.post("/api/warmup")
+async def warmup():
+    """Load the models now, e.g. when someone opens the app, so their first question is fast."""
+    _start_warmup()
+    return {"warming": _warming(), "models": await asyncio.to_thread(model_status)}

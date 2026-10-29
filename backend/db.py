@@ -64,6 +64,15 @@ def create_document(user_id: str, embed_model: str, filename: str, sha256: str) 
     return str(row[0]) if row else None
 
 
+def document_exists(user_id: str, embed_model: str, sha256: str) -> bool:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM documents WHERE user_id = %s AND embed_model = %s AND sha256 = %s",
+            (user_id, embed_model, sha256),
+        ).fetchone()
+    return row is not None
+
+
 def finish_document(doc_id: str, chunks: int, status: str, error: str | None = None) -> None:
     with _conn() as conn:
         conn.execute(
@@ -77,30 +86,56 @@ def delete_document(doc_id: str) -> None:
         conn.execute("DELETE FROM documents WHERE id = %s", (doc_id,))  # chunks follow (CASCADE)
 
 
+def delete_user_document(user_id: str, embed_model: str, doc_id: str) -> str:
+    """Delete one of this user's documents: 'deleted', 'processing' (left alone) or 'missing'."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT status FROM documents WHERE id = %s AND user_id = %s AND embed_model = %s FOR UPDATE",
+            (doc_id, user_id, embed_model),
+        ).fetchone()
+        if row is None:
+            return "missing"
+        if row[0] == "processing":
+            return "processing"  # its chunks are still being written
+        conn.execute("DELETE FROM documents WHERE id = %s", (doc_id,))  # chunks follow (CASCADE)
+    return "deleted"
+
+
 def list_documents(user_id: str, embed_model: str) -> list[dict]:
     with _conn() as conn:
         rows = conn.execute(
-            """SELECT filename, chunks, extract(epoch FROM created_at), status, error
+            """SELECT id, filename, chunks, extract(epoch FROM created_at), status, error
                FROM documents WHERE user_id = %s AND embed_model = %s
                ORDER BY created_at""",
             (user_id, embed_model),
         ).fetchall()
     return [
-        {"filename": f, "chunks": c, "timestamp": float(ts), "status": s, "error": e}
-        for f, c, ts, s, e in rows
+        {"id": str(i), "filename": f, "chunks": c, "timestamp": float(ts), "status": s, "error": e}
+        for i, f, c, ts, s, e in rows
     ]
 
 
 # ──────────────────────────── Chunks ────────────────────────────
 
 def insert_chunks(rows: list[tuple]) -> None:
-    """rows: (id, document_id, user_id, embed_model, source, page, content, embedding)."""
+    """rows: (id, document_id, user_id, embed_model, source, page, seq, content, embedding)."""
     with _conn() as conn:
         conn.cursor().executemany(
-            """INSERT INTO chunks (id, document_id, user_id, embed_model, source, page, content, embedding)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+            """INSERT INTO chunks (id, document_id, user_id, embed_model, source, page, seq, content, embedding)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             rows,
         )
+
+
+def document_chunks(user_id: str, embed_model: str, source: str) -> list[tuple]:
+    """(id, page, content) for one document, in reading order."""
+    with _conn() as conn:
+        return conn.execute(
+            """SELECT id, page, content FROM chunks
+               WHERE user_id = %s AND embed_model = %s AND source = %s
+               ORDER BY page NULLS FIRST, seq NULLS LAST, id""",
+            (user_id, embed_model, source),
+        ).fetchall()
 
 
 def load_chunks(user_id: str, embed_model: str) -> list[tuple]:

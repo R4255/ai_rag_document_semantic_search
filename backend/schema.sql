@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS chunks (
   embedding    vector(768) NOT NULL        -- must match providers.EMBED_DIM
 );
 
+-- Position of the chunk within its document, for showing the document in reading order.
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS seq int;
+
 -- Every query is scoped to one user and one embedding model, so an exact scan over that
 -- user's rows is fast. Add an HNSW index on embedding if single users grow very large.
 CREATE INDEX IF NOT EXISTS chunks_user_model_idx ON chunks (user_id, embed_model);

@@ -23,3 +23,18 @@ def test_per_user_stats_and_eviction():
         assert b["user"] == {"hits": 0, "misses": 1, "size": 2}
 
     asyncio.run(run())
+
+
+def test_clear_owner_drops_only_that_owner():
+    async def run():
+        c = AsyncLRUCache(capacity=10)
+        await c.set("a:q1", "x", owner="a")
+        await c.set("a:q2", "x", owner="a")
+        await c.set("b:q1", "y", owner="b")
+        assert await c.clear_owner("a") == 2
+        assert await c.get("a:q1", owner="a") is None
+        assert await c.get("b:q1", owner="b") == "y"
+        assert (await c.get_stats("a"))["user"]["size"] == 0
+        assert await c.clear_owner("nobody") == 0
+
+    asyncio.run(run())

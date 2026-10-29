@@ -65,7 +65,7 @@ class PgVectorIndex:
         vectors = self.embeddings.embed_documents([c.text for c in chunks])
         db.insert_chunks([
             (c.id, c.meta["document_id"], self.user_id, self.embed_model,
-             c.meta.get("source"), c.meta.get("page"), c.text, _vector(v))
+             c.meta.get("source"), c.meta.get("page"), c.meta.get("seq"), c.text, _vector(v))
             for c, v in zip(chunks, vectors)
         ])
 
